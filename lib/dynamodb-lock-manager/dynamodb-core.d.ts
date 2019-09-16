@@ -1,9 +1,9 @@
 export declare class DynamoDBCore {
     AWS: any;
-    awsConfig: any;
-    constructor(AWS: any);
+    private awsConfig;
+    constructor(aAWS: any);
     /**
-    * Use this when running code locally on your computer to get the AWS credentials from ~/.aws/credentials
+     * Use this when running code locally on your computer to get the AWS credentials from ~/.aws/credentials
      * @param awsProfileName
      */
     useAwsCredentialsFromFile(awsRegion: string, awsProfileName: string): void;

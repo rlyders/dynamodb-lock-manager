@@ -4,25 +4,24 @@ export declare class DynamoDBLockManager extends DynamoDBCore {
     private blockingLocks;
     private myActiveLocks;
     private myActiveLockTimers;
-    myLockUUID: string;
-    lockSecsToLive: number;
-    milliSecsPerSecs: number;
-    lockRefreshSecs: number;
-    deleteMyLockDelaySecs: number;
-    dynamoDb: any;
-    dynaomoDbDocumentClient: any;
-    lockTable: string;
-    constructor(AWS: any);
-    uuid(): any;
+    private myLockUUID;
+    private lockSecsToLive;
+    private milliSecsPerSecs;
+    private lockRefreshSecs;
+    private deleteMyLockDelaySecs;
+    private dynaomoDbDocumentClient;
+    private lockTable;
+    constructor(aAWS: any);
+    uuid(): string;
     getDynamoDbDocumentClient(): any;
     getItem(params: any, callback: (err: any, data: any) => void): void;
     putItem(params: any, callback: (err: any, data: any) => void): void;
     updateItem(params: any, callback: (err: any, data: any) => void): void;
     deleteItem(params: any, callback: (err: any, data: any) => void): void;
     /**
-   * Kill the given lock's heartbeat (cancels the associated interval timer).
-   * return: none
-   */
+     * Kill the given lock's heartbeat (cancels the associated interval timer).
+     * return: none
+     */
     killLockHeartbeat(aLockKey: string): void;
     /**
      * Releases one of my active locks based on a given lock key. If the given lock is not active then callback gives null values.
