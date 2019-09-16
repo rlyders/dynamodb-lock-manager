@@ -1,0 +1,54 @@
+{
+  "name": "dynamodb-lock-manager",
+  "version": "1.0.0",
+  "description": "NodeJS module to manage distributed locks in DynamoDB with the AWS SDK. This package allows the caller to create locks, auto-refresh locks via heartbeats, takeover expired locks, and release locks.",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "scripts": {
+    "test": "jest --config jestconfig.json",
+    "build": "tsc",
+    "format": "prettier --write \"src/**/*.ts\" \"src/**/*.js\"",
+    "lint": "tslint -p tsconfig.json",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm test && npm run lint",
+    "preversion": "npm run lint",
+    "version": "npm run format && git add -A src",
+    "postversion": "git push && git push --tags"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rlyders/dynamodb-lock-manager.git"
+  },
+  "author": "Richard@Lyders.com",
+  "keywords": [
+    "DynamoDB",
+    "distributed",
+    "lock",
+    "heartbeat"
+  ],
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/rlyders/dynamodb-lock-manager/issues"
+  },
+  "homepage": "https://github.com/rlyders/dynamodb-lock-manager#readme",
+  "devDependencies": {
+    "@types/jest": "^24.0.18",
+    "jest": "^24.9.0",
+    "prettier": "^1.18.2",
+    "ts-jest": "^24.1.0",
+    "tslint": "^5.20.0",
+    "tslint-config-prettier": "^1.18.0",
+    "typescript": "^3.6.3"
+  },
+  "files": [
+    "lib/**/*"
+  ],
+  "dependencies": {
+    "@types/debug": "^4.1.5",
+    "@types/node": "^12.7.5",
+    "@types/uuid": "^3.4.5",
+    "aws-sdk": "^2.528.0",
+    "debug": "^4.1.1",
+    "uuid": "^3.3.3"
+  }
+}
