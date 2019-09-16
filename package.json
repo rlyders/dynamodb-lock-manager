@@ -1,6 +1,6 @@
 {
   "name": "dynamodb-lock-manager",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "NodeJS module to manage distributed locks in DynamoDB with the AWS SDK. This package allows the caller to create locks, auto-refresh locks via heartbeats, takeover expired locks, and release locks.",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
