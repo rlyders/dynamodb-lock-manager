@@ -117,9 +117,12 @@ export class DynamoDBLockManager {
   public killLockHeartbeat(aLockKey: string) {
     try {
       const dbg = Debug('killLockHeartbeat');
-      dbg('Cllearing interval timer for lock "%s"', aLockKey);
-      clearInterval(this.myActiveLockTimers.get(aLockKey) as ReturnType<typeof setTimeout>);
-      this.myActiveLockTimers.delete(aLockKey);
+      if (this.myActiveLockTimers.has(aLockKey)) {
+        dbg('Clearing interval timer for lock "%s"', aLockKey);
+        const lockInterval = this.myActiveLockTimers.get(aLockKey);
+        clearInterval(lockInterval as ReturnType<typeof setTimeout>);
+        this.myActiveLockTimers.delete(aLockKey);
+      }
     } catch (err) {
       throw new Error(`Unexpected error while trying to kill interval timer for lock "${aLockKey}": ${err}`);
     }
@@ -263,16 +266,22 @@ export class DynamoDBLockManager {
   public refreshLockCalledByInterval(aLockKey: string) {
     try {
       const dbg = Debug('callRefresher');
-      dbg('calling refreshLock("%s")...', aLockKey);
-      this.refreshLock(aLockKey, (err: any, data: any) => {
-        if (err) {
-          throw new Error(`Failed to refresh lock "${aLockKey}": ${JSON.stringify(err, null, 2)}`);
-          // TODO: if we lose connectivity the lock will soon expire, but how to handle this scenario here?
-          // TODO: if another process irreverently removes or replaces our lock in the database, handle it here.
-        } else {
-          dbg('Refreshed lock "%s":', aLockKey, data);
-        }
-      });
+      if (!this.myActiveLocks.has(aLockKey)) {
+        dbg('This active lock has been released, so kill its interval timer');
+        this.killLockHeartbeat(aLockKey);
+      } else {
+        dbg('calling refreshLock("%s")...', aLockKey);
+
+        this.refreshLock(aLockKey, (err: any, data: any) => {
+          if (err) {
+            throw new Error(`Failed to refresh lock "${aLockKey}": ${JSON.stringify(err, null, 2)}`);
+            // TODO: if we lose connectivity the lock will soon expire, but how to handle this scenario here?
+            // TODO: if another process irreverently removes or replaces our lock in the database, handle it here.
+          } else {
+            dbg('Refreshed lock "%s":', aLockKey, data);
+          }
+        });
+      }
     } catch (err) {
       throw new Error(`Unexpected error while trying to get/watch/add lock "${aLockKey}" to my watch list : ${err}`);
     }
@@ -281,9 +290,9 @@ export class DynamoDBLockManager {
   public createIntervalForLock(aLockKey: string) {
     try {
       const dbg = Debug('createIntervalForLock');
-      // has this lock already been added to my list of active locks?
-      if (!this.myActiveLocks.has(aLockKey)) {
-        // if this lock is just being made active, then set an interval refresh timer
+      // has an interval already been created for this active lock?
+      if (!this.myActiveLockTimers.has(aLockKey)) {
+        // if this lock has not had an interval creaeted yet, then set an interval refresh timer
         // to refresh this lock and keep it active until it is deleted from myActiveLocks
         dbg('Starting timer interval to refresh lock "%s" every %s secs...', aLockKey, this.lockRefreshSecs);
         this.myActiveLockTimers.set(
@@ -314,7 +323,7 @@ export class DynamoDBLockManager {
         dbg('lockDatabaseAttributes=%O', lockDatabaseAttributes);
         const lockKey = lockDatabaseAttributes.lkey;
         // now that I own this lock, remove it from the list of watched locks
-        if (this.blockingLocks.hasOwnProperty(lockKey)) {
+        if (this.blockingLocks.has(lockKey)) {
           dbg('Delete lock "%s" from watch list...', lockKey);
           this.blockingLocks.delete(lockKey);
         }
@@ -429,7 +438,7 @@ export class DynamoDBLockManager {
             }
           } else {
             dbg('Updated existing lock "%s" in database to: $O', aLockKey, upData);
-            const upLock: DynamoDBLock | null = this.recordMyUpdatedLock(aLockKey);
+            const upLock: DynamoDBLock | null = this.recordMyUpdatedLock(upData.Attributes);
             callback(null, upLock);
           }
         });
@@ -442,8 +451,10 @@ export class DynamoDBLockManager {
   public refreshLock(aLockKey: string, callback: (err: any, data: any) => void) {
     try {
       const dbg = Debug('refreshLock');
-      dbg('Refresh lock "%s" by calling setLock() for one of my active locks', aLockKey);
-      this.setLock(aLockKey, callback);
+      if (this.myActiveLocks.has(aLockKey)) {
+        dbg('Refresh lock "%s" by calling setLock() for one of my active locks', aLockKey);
+        this.setLock(aLockKey, callback);
+      }
     } catch (err) {
       throw new Error(`Unexpected error while trying to refresh lock "${aLockKey}": ${err}`);
     }
