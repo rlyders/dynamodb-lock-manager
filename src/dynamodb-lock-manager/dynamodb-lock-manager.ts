@@ -1,13 +1,24 @@
-import { DynamoDBCore } from './dynamodb-core';
 import { DynamoDBLock } from './dynamodb-lock';
 
 import Debug from 'debug';
 const debug = Debug('dynamodb-lock');
 
-import aws from 'aws-sdk';
+import { DynamoDB } from 'aws-sdk';
 import uuidv1 from 'uuid/v1';
 
-export class DynamoDBLockManager extends DynamoDBCore {
+export class DynamoDBLockManager {
+  public myLockUUID: string = '';
+  public lockSecsToLive = 10; // a lock is only held for N seconds
+  public lockRefreshSecs = this.lockSecsToLive / 2; // we will attempt to extend each active lock at the mid-life of the lock
+
+  // deleteMyLockDelaySecs: delay for N seconds before actually purging an active lock from the
+  // active lock list to accommodate for a possible running refresh timer
+  public deleteMyLockDelaySecs = 1;
+  public lockTable: string = '';
+
+  private dbClient: DynamoDB.DocumentClient;
+  private milliSecsPerSecs = 1000;
+
   private blockingLocks: Map<string, DynamoDBLock> = new Map<string, DynamoDBLock>();
   private myActiveLocks: Map<string, DynamoDBLock> = new Map<string, DynamoDBLock>();
   private myActiveLockTimers: Map<string, ReturnType<typeof setTimeout> | number> = new Map<
@@ -15,21 +26,15 @@ export class DynamoDBLockManager extends DynamoDBCore {
     ReturnType<typeof setTimeout> | number
   >();
 
-  private myLockUUID: string = '';
-  private lockSecsToLive = 10; // a lock is only held for N seconds
-  private milliSecsPerSecs = 1000;
-  private lockRefreshSecs = this.lockSecsToLive / 2; // we will attempt to extend each active lock at the mid-life of the lock
-
-  // deleteMyLockDelaySecs: delay for N seconds before actually purging an active lock from the
-  // active lock list to accommodate for a possible running refresh timer
-  private deleteMyLockDelaySecs = 1;
-
-  private dynaomoDbDocumentClient: any = null;
-
-  private lockTable: string = '';
-
-  constructor(aAWS: any) {
-    super(aAWS);
+  constructor(aDbClient: DynamoDB.DocumentClient, aLockTableName: string) {
+    if (!aDbClient) {
+      throw new Error('aDynamoDbDocumentClient is a reqiured parameter.');
+    }
+    if (!aLockTableName) {
+      throw new Error('aLockTableName is a reqiured parameter.');
+    }
+    this.dbClient = aDbClient;
+    this.lockTable = aLockTableName;
     this.myLockUUID = this.uuid();
   }
 
@@ -37,19 +42,11 @@ export class DynamoDBLockManager extends DynamoDBCore {
     return uuidv1();
   }
 
-  public getDynamoDbDocumentClient(): any {
-    if (!this.dynaomoDbDocumentClient) {
-      // Create the DynamoDB service object
-      this.dynaomoDbDocumentClient = new this.AWS.DynamoDB.DocumentClient({ apiVersion: '2012-10-08' });
-    }
-    return this.dynaomoDbDocumentClient;
-  }
-
   public getItem(params: any, callback: (err: any, data: any) => void) {
     try {
       const dbg = Debug('getItem');
 
-      this.getDynamoDbDocumentClient().get(params, (err: any, data: any) => {
+      this.dbClient.get(params, (err: any, data: any) => {
         if (err) {
           callback(`Failed to get item: ${err}`, null);
         } else {
@@ -66,7 +63,7 @@ export class DynamoDBLockManager extends DynamoDBCore {
     try {
       const dbg = Debug('putItem');
 
-      this.getDynamoDbDocumentClient().put(params, (err: any, data: any) => {
+      this.dbClient.put(params, (err: any, data: any) => {
         if (err) {
           callback(`Failed to add item: ${err}`, null);
         } else {
@@ -83,9 +80,9 @@ export class DynamoDBLockManager extends DynamoDBCore {
     try {
       const dbg = Debug('updateItem');
 
-      this.getDynamoDbDocumentClient().update(params, (err: any, data: any) => {
+      this.dbClient.update(params, (err: any, data: any) => {
         if (err) {
-          callback(`Failed to update item: ${err}`, null);
+          callback(err, null);
         } else {
           dbg('Updated item: %O', data);
           callback(null, data);
@@ -100,7 +97,7 @@ export class DynamoDBLockManager extends DynamoDBCore {
     try {
       const dbg = Debug('deleteItem');
 
-      this.getDynamoDbDocumentClient().delete(params, (err: any, data: any) => {
+      this.dbClient.delete(params, (err: any, data: any) => {
         if (err) {
           callback(`Failed to delete item: ${err}`, null);
         } else {
@@ -347,7 +344,7 @@ export class DynamoDBLockManager extends DynamoDBCore {
   public setLock(aLockKey: string, callback: (err: any, lock: DynamoDBLock | null) => void) {
     try {
       const dbg = Debug('setLock');
-      let existingUUID: string = '';
+      let existingUUID: string | null = null;
       let existingVersionNum: number = -1;
       const now: number = Date.now();
 
@@ -379,7 +376,7 @@ export class DynamoDBLockManager extends DynamoDBCore {
           'attribute_not_exists(createdByUUID) ' + // if lock doesn't exist...
           ' OR (    createdByUUID = :existingUUID ' + // OR... lock ID hasn't changed since last checked
           '     AND lockVersionNum = :existingVersionNum ' + // AND lock ver # hasn't changed since last checked
-          '     AND (   :blockingLockExpired ' + // AND lock has expired (for blocking locks)
+          '     AND (   :blockingLockExpired = :true ' + // AND lock has expired (for blocking locks)
           '          OR createdByUUID = :newUUID))', // OR this is my lock
         ExpressionAttributeNames: {
           '#ttl': 'ttl',
@@ -392,6 +389,7 @@ export class DynamoDBLockManager extends DynamoDBCore {
           ':newTtl': newTtl,
           ':newUUID': this.myLockUUID,
           ':newVersionNum': aNewVersionNum,
+          ':true': true,
         },
         Key: { lkey: aLockKey },
         ReturnValues: 'ALL_NEW',

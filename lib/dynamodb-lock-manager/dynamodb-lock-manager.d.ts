@@ -1,19 +1,18 @@
-import { DynamoDBCore } from './dynamodb-core';
 import { DynamoDBLock } from './dynamodb-lock';
-export declare class DynamoDBLockManager extends DynamoDBCore {
+import { DynamoDB } from 'aws-sdk';
+export declare class DynamoDBLockManager {
+    myLockUUID: string;
+    lockSecsToLive: number;
+    lockRefreshSecs: number;
+    deleteMyLockDelaySecs: number;
+    lockTable: string;
+    private dbClient;
+    private milliSecsPerSecs;
     private blockingLocks;
     private myActiveLocks;
     private myActiveLockTimers;
-    private myLockUUID;
-    private lockSecsToLive;
-    private milliSecsPerSecs;
-    private lockRefreshSecs;
-    private deleteMyLockDelaySecs;
-    private dynaomoDbDocumentClient;
-    private lockTable;
-    constructor(aAWS: any);
+    constructor(aDbClient: DynamoDB.DocumentClient, aLockTableName: string);
     uuid(): string;
-    getDynamoDbDocumentClient(): any;
     getItem(params: any, callback: (err: any, data: any) => void): void;
     putItem(params: any, callback: (err: any, data: any) => void): void;
     updateItem(params: any, callback: (err: any, data: any) => void): void;
