@@ -5,7 +5,7 @@ export class DynamoDBLock {
   public lockExpireSecs: number;
   public createdByHost: string;
   public createdByUser: string;
-  public createdAt: Date;
+  public createdAt: Date | null;
   public ttl: number;
 
   constructor(
@@ -15,7 +15,7 @@ export class DynamoDBLock {
     aLockExpireSecs: number,
     aCreatedByHost: string,
     aCreatedByUser: string,
-    aCreatedAt: Date,
+    aCreatedAt: Date | null,
     aTtl: number,
   ) {
     this.lkey = aLkey;

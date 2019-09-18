@@ -1,10 +1,7 @@
-import { DynamoDBLock } from './dynamodb-lock';
-
-import Debug from 'debug';
-const debug = Debug('dynamodb-lock');
-
 import { DynamoDB } from 'aws-sdk';
+import Debug from 'debug';
 import uuidv1 from 'uuid/v1';
+import { DynamoDBLock } from './dynamodb-lock';
 
 export class DynamoDBLockManager {
   public myLockUUID: string = '';
@@ -26,7 +23,10 @@ export class DynamoDBLockManager {
     ReturnType<typeof setTimeout> | number
   >();
 
-  constructor(aDbClient: DynamoDB.DocumentClient, aLockTableName: string) {
+  private hostName: string;
+  private userName: string;
+
+  constructor(aDbClient: DynamoDB.DocumentClient, aLockTableName: string, aHostName: string, aUserName: string) {
     if (!aDbClient) {
       throw new Error('aDynamoDbDocumentClient is a reqiured parameter.');
     }
@@ -36,78 +36,56 @@ export class DynamoDBLockManager {
     this.dbClient = aDbClient;
     this.lockTable = aLockTableName;
     this.myLockUUID = this.uuid();
+    this.hostName = aHostName;
+    this.userName = aUserName;
   }
 
   public uuid() {
     return uuidv1();
   }
 
-  public getItem(params: any, callback: (err: any, data: any) => void) {
-    try {
-      const dbg = Debug('getItem');
-
-      this.dbClient.get(params, (err: any, data: any) => {
-        if (err) {
-          callback(`Failed to get item: ${err}`, null);
-        } else {
-          dbg('Got item: %O', data);
-          callback(null, data);
-        }
+  public getItem(params: any): Promise<any> {
+    const dbg = Debug('getItem');
+    return this.dbClient
+      .get(params)
+      .promise()
+      .then(data => {
+        dbg('Got item: %O', data);
+        return data;
       });
-    } catch (err) {
-      throw new Error(`Unexpected error while trying to get DynamoDb item": ${err}`);
-    }
   }
 
-  public putItem(params: any, callback: (err: any, data: any) => void) {
-    try {
-      const dbg = Debug('putItem');
-
-      this.dbClient.put(params, (err: any, data: any) => {
-        if (err) {
-          callback(`Failed to add item: ${err}`, null);
-        } else {
-          dbg('Added item: %O', data);
-          callback(null, data);
-        }
+  public putItem(params: any): Promise<any> {
+    const dbg = Debug('putItem');
+    return this.dbClient
+      .put(params)
+      .promise()
+      .then(data => {
+        dbg('Added item: %O', data);
+        return data;
       });
-    } catch (err) {
-      throw new Error(`Unexpected error while trying to put DynamoDb item": ${err}`);
-    }
   }
 
-  public updateItem(params: any, callback: (err: any, data: any) => void) {
-    try {
-      const dbg = Debug('updateItem');
-
-      this.dbClient.update(params, (err: any, data: any) => {
-        if (err) {
-          callback(err, null);
-        } else {
-          dbg('Updated item: %O', data);
-          callback(null, data);
-        }
+  public updateItem(params: any): Promise<any> {
+    const dbg = Debug('updateItem');
+    return this.dbClient
+      .update(params)
+      .promise()
+      .then(data => {
+        dbg('Updated item: %O', data);
+        return data;
       });
-    } catch (err) {
-      throw new Error(`Unexpected error while trying to update DynamoDb item": ${err}`);
-    }
   }
 
-  public deleteItem(params: any, callback: (err: any, data: any) => void) {
-    try {
-      const dbg = Debug('deleteItem');
-
-      this.dbClient.delete(params, (err: any, data: any) => {
-        if (err) {
-          callback(`Failed to delete item: ${err}`, null);
-        } else {
-          dbg('Deleted item: %O', data);
-          callback(null, data);
-        }
+  public deleteItem(params: any): Promise<any> {
+    const dbg = Debug('deleteItem');
+    return this.dbClient
+      .delete(params)
+      .promise()
+      .then(data => {
+        dbg('Deleted item: %O', data);
+        return data;
       });
-    } catch (err) {
-      throw new Error(`Unexpected error while trying to delete DynamoDb item": ${err}`);
-    }
   }
 
   /**
@@ -134,16 +112,20 @@ export class DynamoDBLockManager {
    *      data: the item attributes of the deleted item
    * DynamoDB API: https://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/DynamoDB.html#deleteItem-property
    */
-  public releaseMyLock(aLockKey: string, callback: (err: any, data: any) => void) {
+  public releaseMyLock(aLockKey: string): Promise<DynamoDBLock | null> {
     try {
       const dbg = Debug('releaseMyLock');
 
       const table = this.lockTable;
 
-      if (this.myActiveLocks.has(aLockKey)) {
+      if (!this.myActiveLocks.has(aLockKey)) {
+        return Promise.resolve(null);
+      } else {
         this.killLockHeartbeat(aLockKey);
-        const releasedLock = this.myActiveLocks.get(aLockKey);
-        if (releasedLock) {
+        const lockToRelease = this.myActiveLocks.get(aLockKey);
+        if (!lockToRelease) {
+          throw new Error(`Invalid lock found for "${aLockKey}" in active lock list.`);
+        } else {
           // give a sec for any possible running timer sessions to complete before purging the data
           setTimeout(() => {
             this.myActiveLocks.delete(aLockKey);
@@ -151,7 +133,7 @@ export class DynamoDBLockManager {
 
           const ddbDelTableItem = {
             ConditionExpression: 'createdByUUID = :aUUID',
-            ExpressionAttributeValues: { ':aUUID': releasedLock.createdByUUID },
+            ExpressionAttributeValues: { ':aUUID': lockToRelease.createdByUUID },
             Key: {
               lkey: aLockKey,
             },
@@ -160,23 +142,38 @@ export class DynamoDBLockManager {
           };
 
           // Call DynamoDB.deleteItem to delete an item in the table
-          this.deleteItem(ddbDelTableItem, (delErr: any, delData: any) => {
-            if (delErr) {
-              callback(
+          return this.deleteItem(ddbDelTableItem)
+            .catch(err => {
+              throw new Error(
                 `Failed to delete database lock "${aLockKey}":` +
-                  ` ${delErr}: payload: ${JSON.stringify(ddbDelTableItem, null, 2)}`,
-                null,
+                  ` ${err}: payload: ${JSON.stringify(ddbDelTableItem, null, 2)}`,
               );
-            } else {
-              dbg('Cleared "%s" lock: %O', aLockKey, delData);
-              callback(null, releasedLock);
-            }
-          });
+            })
+            .then(data => {
+              dbg('Cleared "%s" lock: %O', aLockKey, data);
+              return Promise.resolve(lockToRelease);
+            });
         }
       }
     } catch (err) {
-      callback(`Unexpected error while trying to release my lock "${aLockKey}": ${err}`, null);
+      throw new Error(`Unexpected error while trying to release my lock "${aLockKey}": ${err}`);
     }
+  }
+
+  public varToDate(dateVar: string | Date | null): Date | null {
+    let returnDate: Date | null = null;
+    try {
+      if (!dateVar) {
+        returnDate = null;
+      } else if (this.isValidDate(dateVar)) {
+        returnDate = dateVar as Date;
+      } else if (typeof dateVar === 'string' || typeof dateVar === 'number') {
+        returnDate = new Date(dateVar);
+      }
+    } catch (err) {
+      returnDate = null;
+    }
+    return returnDate;
   }
 
   /**
@@ -187,14 +184,14 @@ export class DynamoDBLockManager {
    *      err: an error if a database error occurred
    *      data: the item attributes of the deleted item
    */
-  public addDbItemToWatchList(aLockKey: string, dbLockItem: any, callback: (err: any, data: any) => void) {
+  public addDbItemToWatchList(aLockKey: string, dbLockItem: any): DynamoDBLock | null {
     try {
       const dbg = Debug('addDbItemToWatchList');
       // check if createdByUUID is non-empty which means that
       // the lock exists... if we just got back an empty object
       // then that means no lock exists
       if (dbLockItem && dbLockItem.createdByUUID && dbLockItem.createdByUUID.length > 0) {
-        dbg('Given database lock item: $O', dbLockItem);
+        dbg('Given database lock item: %O', dbLockItem);
         // previously, this lock was changed prior to us trying to take it over, so
         // now we are just going to record it so we can see if it has expired the next
         // time we are asked to try to lock it
@@ -208,19 +205,21 @@ export class DynamoDBLockManager {
           lockVersionNum: dbLockItem.lockVersionNum,
           ttl: Date.now() + this.lockSecsToLive,
         };
-        dbg('Adding blocking DynamoDBLock object to watch list: $O', blockingLock);
+        dbg('Adding blocking DynamoDBLock object to watch list: %O', blockingLock);
         this.blockingLocks.set(aLockKey, blockingLock);
 
         // now that we've recorded the current expected expiration time of the lock
         // we can exit and wait until we try to lock it again...
-        callback(null, this.blockingLocks.get(aLockKey));
+        return this.blockingLocks.get(aLockKey) || null;
+      } else {
+        return null;
       }
     } catch (err) {
-      callback(`Unexpected error while trying to add dbItem for lock "${aLockKey}" to my watch list : ${err}`, null);
+      throw new Error(`Unexpected error while trying to add dbItem for lock "${aLockKey}" to my watch list : ${err}`);
     }
   }
 
-  public getAndWatchBlockingLockOrCreate(aLockKey: string, callback: (err: any, lock: DynamoDBLock | null) => void) {
+  public getAndWatchBlockingLockOrCreate(aLockKey: string): Promise<DynamoDBLock | null> {
     try {
       const dbg = Debug('getAndWatchBlockingLockOrCreate');
       const ddbGetTableItem = {
@@ -230,29 +229,33 @@ export class DynamoDBLockManager {
         TableName: this.lockTable,
       };
       dbg('ddbGetTableItem=%O', ddbGetTableItem);
-      this.getItem(ddbGetTableItem, (getErr: any, getData: any) => {
-        if (getErr) {
-          dbg('Failed to search for existing lock "%s": %O', aLockKey, getErr);
-          callback(getErr, null);
-        } else {
-          dbg('Found existing lock "%s": %O', aLockKey, getData);
+      return this.getItem(ddbGetTableItem)
+        .catch(err => {
+          throw new Error(`Failed to search for existing lock "${aLockKey}": ${err}`);
+        })
+        .then(data => {
+          dbg('Found existing lock "%s": %O', aLockKey, data);
           // check if we found something...
-          if (getData && getData.Item && getData.Item.createdByUUID && getData.Item.createdByUUID.length > 0) {
+          if (data && data.Item && data.Item.createdByUUID && data.Item.createdByUUID.length > 0) {
             // if we found a lock, then add it to the lock watch list
-            this.addDbItemToWatchList(aLockKey, getData.Item, callback);
+            return Promise.resolve(this.addDbItemToWatchList(aLockKey, data.Item));
           } else {
-            dbg('No existing lock "%s" found: %O', aLockKey, getData);
+            dbg('No existing lock "%s" found: %O', aLockKey, data);
             // when the calling routine initially tried to place this lock,
             // the lock had already been extended or re-locked by another user by the time we tried to do an upsert,
             // (that's how we ended in this routine, getAndWatchBlockingLockOrCreate)
             // but since that last attempt the lock has been deleted, so just try the upsert again
             // in order to create a branch new lock
-            this.setLock(aLockKey, callback);
+            return this.setLock(aLockKey);
           }
-        }
-      });
+        })
+        .catch(err => {
+          throw new Error(
+            `Unexpected error while trying to add lock "${aLockKey}" to my blocking/active list : ${err}`,
+          );
+        });
     } catch (err) {
-      callback(`Unexpected error while trying to get/watch/add lock "${aLockKey}" to my watch list : ${err}`, null);
+      throw new Error(`Unexpected error while trying to get lock "${aLockKey}" or create it: ${err}`);
     }
   }
 
@@ -263,24 +266,27 @@ export class DynamoDBLockManager {
    * Throws Error if something unexpected occurs which only terminates the current timer/interval process.
    * If called from within an interval, then Throw Error terminates the current interval while future intervals will still be executed.
    */
-  public refreshLockCalledByInterval(aLockKey: string) {
+  public refreshLockCalledByInterval(aLockKey: string): Promise<DynamoDBLock | null> {
     try {
       const dbg = Debug('callRefresher');
       if (!this.myActiveLocks.has(aLockKey)) {
-        dbg('This active lock has been released, so kill its interval timer');
         this.killLockHeartbeat(aLockKey);
+        return Promise.reject('This active lock has been released, so kill its interval timer');
       } else {
         dbg('calling refreshLock("%s")...', aLockKey);
-
-        this.refreshLock(aLockKey, (err: any, data: any) => {
-          if (err) {
+        return this.refreshLock(aLockKey)
+          .catch(err => {
             throw new Error(`Failed to refresh lock "${aLockKey}": ${JSON.stringify(err, null, 2)}`);
             // TODO: if we lose connectivity the lock will soon expire, but how to handle this scenario here?
             // TODO: if another process irreverently removes or replaces our lock in the database, handle it here.
-          } else {
+          })
+          .then(data => {
             dbg('Refreshed lock "%s":', aLockKey, data);
-          }
-        });
+            return data;
+          })
+          .catch(err => {
+            return err;
+          });
       }
     } catch (err) {
       throw new Error(`Unexpected error while trying to get/watch/add lock "${aLockKey}" to my watch list : ${err}`);
@@ -337,7 +343,7 @@ export class DynamoDBLockManager {
           lockVersionNum: lockDatabaseAttributes.lockVersionNum,
           ttl: lockDatabaseAttributes.ttl,
         };
-        dbg('Add DynamoDBLock to our list of active locks: $O', activeLock);
+        dbg('Add DynamoDBLock to our list of active locks: %O', activeLock);
         this.myActiveLocks.set(lockKey, activeLock);
         // create timer only after lock has been added to the list of active locks since the timer uses the data in that list
         this.createIntervalForLock(lockKey);
@@ -350,35 +356,83 @@ export class DynamoDBLockManager {
     }
   }
 
-  public setLock(aLockKey: string, callback: (err: any, lock: DynamoDBLock | null) => void) {
+  public setLockUpdateItemResolveHandler(aLockKey: string) {
+    return (data: any): Promise<DynamoDBLock | null> => {
+      const dbg = Debug('setLockUpdateItemResolveHandler');
+      dbg('Updated existing lock "%s" in database to: %O', aLockKey, data);
+      return Promise.resolve(this.recordMyUpdatedLock(data ? data.Attributes : null));
+    };
+  }
+
+  public setLockUpdateItemRejectHandler(aLockKey: string) {
+    return (err: any): Promise<DynamoDBLock | null> => {
+      const dbg = Debug('setLockUpdateItemHandler');
+
+      dbg('Failed to replace lock "%s": ', aLockKey, err);
+      if (err.code === 'ConditionalCheckFailedException') {
+        // this basically means that the lock that we were trying to update has been changed...
+        // either it was re-created by another user (new UUID)
+        // or extended (new version #) since we last checked it
+        dbg('Take note of the existing lock "%s" and check it again later for possible expiration', aLockKey);
+        return this.getAndWatchBlockingLockOrCreate(aLockKey)
+          .catch(watchErr => {
+            throw new Error(`Failed to record conflicting lock: ${JSON.stringify(watchErr, null, 2)}`);
+          })
+          .then(watchLock => {
+            dbg('Recorded conflicting lock: %O', watchLock);
+            return Promise.resolve(watchLock);
+          });
+      } else {
+        throw new Error(err);
+      }
+    };
+  }
+
+  public isValidDate(date: any): boolean {
+    return date && Object.prototype.toString.call(date) === '[object Date]' && !isNaN(date);
+  }
+
+  public setLock(aLockKey: string): Promise<DynamoDBLock | null> {
     try {
       const dbg = Debug('setLock');
-      let existingUUID: string | null = null;
-      let existingVersionNum: number = -1;
-      const now: number = Date.now();
+      const nowDate: Date = new Date();
+      const nowSecs: number = nowDate.getTime();
 
-      const newTtl: number = now + this.lockSecsToLive; // default value of "not exipired"
+      const newTtl: number = nowSecs + this.lockSecsToLive; // default value of "not exipired"
       let blockingLockExpired: boolean = false;
       let aNewVersionNum = 0;
       const myActiveLock = this.myActiveLocks.get(aLockKey);
       const blockingLock = this.blockingLocks.get(aLockKey);
+      let lockToUpdate: DynamoDBLock;
 
       if (myActiveLock) {
-        dbg('myActiveLock=%O', myActiveLock);
         // if this is a refresh request for an active lock that I own...
-        existingUUID = myActiveLock.createdByUUID;
-        existingVersionNum = myActiveLock.lockVersionNum;
+        lockToUpdate = myActiveLock;
         // increment the version to extend it and keep it active
-        aNewVersionNum = existingVersionNum + 1;
+        aNewVersionNum = myActiveLock.lockVersionNum + 1;
       } else if (blockingLock) {
-        dbg('blockingLock=%O', blockingLock);
+        lockToUpdate = blockingLock;
         // if this is someone else's lock...
-        existingUUID = blockingLock.createdByUUID;
-        existingVersionNum = blockingLock.lockVersionNum;
         // the following boolean will be used within the DynamoDB query condition expression to
         // determine whether to allow the existing lock to be updated or not
-        blockingLockExpired = blockingLock.ttl < now;
+        blockingLockExpired = blockingLock.ttl < nowSecs;
+      } else {
+        lockToUpdate = new DynamoDBLock(
+          aLockKey,
+          this.myLockUUID,
+          aNewVersionNum,
+          this.lockSecsToLive,
+          this.hostName,
+          this.userName,
+          nowDate,
+          newTtl,
+        );
       }
+
+      lockToUpdate.createdAt = this.varToDate(lockToUpdate.createdAt);
+
+      dbg('lockToUpdate=%O', lockToUpdate);
+      dbg(Object.prototype.toString.call(lockToUpdate.createdAt));
 
       const ddbUpdateTableItem = {
         ConditionExpression:
@@ -392,8 +446,12 @@ export class DynamoDBLockManager {
         },
         ExpressionAttributeValues: {
           ':blockingLockExpired': blockingLockExpired,
-          ':existingUUID': existingUUID,
-          ':existingVersionNum': existingVersionNum,
+          // ':createdAt': lockToUpdate.createdAt.toISOString(),
+          ':createdAt': lockToUpdate.createdAt ? lockToUpdate.createdAt.toISOString() : null,
+          ':createdByHost': lockToUpdate.createdByHost,
+          ':createdByUser': lockToUpdate.createdByUser,
+          ':existingUUID': lockToUpdate.createdByUUID,
+          ':existingVersionNum': lockToUpdate.lockVersionNum,
           ':lockExpireSecs': this.lockSecsToLive,
           ':newTtl': newTtl,
           ':newUUID': this.myLockUUID,
@@ -407,7 +465,10 @@ export class DynamoDBLockManager {
           'SET createdByUUID = :newUUID, ' +
           'lockVersionNum = :newVersionNum, ' +
           'lockExpireSecs = :lockExpireSecs, ' +
-          '#ttl = :newTtl',
+          '#ttl = :newTtl, ' +
+          'createdAt = :createdAt, ' +
+          'createdByUser = :createdByUser, ' +
+          'createdByHost = :createdByHost',
       };
       dbg('ddbUpdateTableItem=%O', ddbUpdateTableItem);
 
@@ -415,45 +476,29 @@ export class DynamoDBLockManager {
         myActiveLock && // if this is a refresh request for an active lock I own
         !this.myActiveLocks.has(aLockKey)
       ) {
-        // and the lock has been canceled since this timer started
+        // if the lock isn't active anymore then it must have been canceled since the start of this function, so abort!
         dbg('Refresh canceled...ignore.');
-        callback(null, null);
+        return Promise.resolve(null);
       } else {
-        this.updateItem(ddbUpdateTableItem, (upErr: any, upData: any) => {
-          if (upErr) {
-            dbg('Failed to replace lock "%s": ', aLockKey, upErr);
-            if (upErr.code === 'ConditionalCheckFailedException') {
-              // this basically means that the lock that we were trying to update has been changed...
-              // either it was re-created by another user (new UUID)
-              // or extended (new version #) since we last checked it
-              dbg('Take note of the existing lock "%s" and check it again later for possible expiration', aLockKey);
-              this.getAndWatchBlockingLockOrCreate(aLockKey, (watchErr, watchLock) => {
-                if (watchErr) {
-                  callback(`Failed to record conflicting lock: ${JSON.stringify(watchErr, null, 2)}`, null);
-                } else {
-                  dbg('Recorded conflicting lock: $O', watchLock);
-                  callback(null, watchLock);
-                }
-              });
-            }
-          } else {
-            dbg('Updated existing lock "%s" in database to: $O', aLockKey, upData);
-            const upLock: DynamoDBLock | null = this.recordMyUpdatedLock(upData.Attributes);
-            callback(null, upLock);
-          }
-        });
+        return this.updateItem(ddbUpdateTableItem)
+          .then(this.setLockUpdateItemResolveHandler(aLockKey), this.setLockUpdateItemRejectHandler(aLockKey))
+          .catch(err => {
+            throw new Error(err);
+          });
       }
     } catch (err) {
       throw new Error(`Unexpected error while trying to set lock "${aLockKey}": ${err}`);
     }
   }
 
-  public refreshLock(aLockKey: string, callback: (err: any, data: any) => void) {
+  public refreshLock(aLockKey: string): Promise<DynamoDBLock | null> {
     try {
       const dbg = Debug('refreshLock');
       if (this.myActiveLocks.has(aLockKey)) {
         dbg('Refresh lock "%s" by calling setLock() for one of my active locks', aLockKey);
-        this.setLock(aLockKey, callback);
+        return this.setLock(aLockKey);
+      } else {
+        return Promise.resolve(null);
       }
     } catch (err) {
       throw new Error(`Unexpected error while trying to refresh lock "${aLockKey}": ${err}`);

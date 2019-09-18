@@ -1,5 +1,6 @@
 import AWS from 'aws-sdk';
 import Debug from 'debug';
+import * as os from 'os';
 import { DynamoDBLock, DynamoDBLockManager } from '.';
 
 const awsRegion = 'us-east-1';
@@ -12,24 +13,23 @@ AWS.config.update({ credentials: AWS.config.credentials, region: awsRegion });
 
 const dbDocClient = new AWS.DynamoDB.DocumentClient();
 
-const dbLockMgr = new DynamoDBLockManager(dbDocClient, myLockTableName);
+const dbLockMgr = new DynamoDBLockManager(dbDocClient, myLockTableName, os.hostname(), os.userInfo().username);
 
 function handleReturnedLock(aLock: DynamoDBLock | null) {
   try {
     const dbg = Debug('handleReturnedLock');
     if (aLock) {
       if (aLock.createdByUUID === dbLockMgr.myLockUUID) {
-        dbg(
-          'This is my lock, so set a timer to release this lock in 45 seconds to act like we are doing some work for a while.',
-        );
+        dbg('This is my lock, so set a timer to release it in 45 secs to act like we are doing some work.');
         setTimeout(() => {
-          dbLockMgr.releaseMyLock(myLockKey, (err, data) => {
-            if (err) {
+          dbLockMgr
+            .releaseMyLock(myLockKey)
+            .catch(err => {
               throw new Error(`Failed to release lock: ${err}`);
-            } else {
+            })
+            .then(data => {
               dbg('Released lock: %O', data);
-            }
-          });
+            });
         }, 30 * 1000);
       } else {
         dbg('This is not my lock, therefore this lock is blocking me. Come back after it has expired and try again.');
@@ -46,14 +46,15 @@ function handleReturnedLock(aLock: DynamoDBLock | null) {
 function tryToSetLock() {
   try {
     const dbg = Debug('handleReturnedLock');
-    dbLockMgr.setLock(myLockKey, (err: any, aLock: DynamoDBLock | null) => {
-      if (err) {
-        dbg('Failed to set lock: %O', err);
-      } else {
-        dbg('Set lock: %O', aLock);
-        handleReturnedLock(aLock);
-      }
-    });
+    dbLockMgr
+      .setLock(myLockKey)
+      .catch(err => {
+        throw new Error(`Failed to set lock: ${err}`);
+      })
+      .then(data => {
+        dbg('Set lock: %O', data);
+        handleReturnedLock(data);
+      });
   } catch (err) {
     throw new Error(`Failed during tryToSetLock: ${err}`);
   }
