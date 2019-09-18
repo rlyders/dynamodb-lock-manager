@@ -23,10 +23,15 @@ export class DynamoDBLockManager {
     ReturnType<typeof setTimeout> | number
   >();
 
-  private hostName: string;
-  private userName: string;
+  private calledByHostName: string;
+  private calledByUserName: string;
 
-  constructor(aDbClient: DynamoDB.DocumentClient, aLockTableName: string, aHostName: string, aUserName: string) {
+  constructor(
+    aDbClient: DynamoDB.DocumentClient,
+    aLockTableName: string,
+    aCalledByHostName: string,
+    aCalledByUserName: string,
+  ) {
     if (!aDbClient) {
       throw new Error('aDynamoDbDocumentClient is a reqiured parameter.');
     }
@@ -36,8 +41,8 @@ export class DynamoDBLockManager {
     this.dbClient = aDbClient;
     this.lockTable = aLockTableName;
     this.myLockUUID = this.uuid();
-    this.hostName = aHostName;
-    this.userName = aUserName;
+    this.calledByHostName = aCalledByHostName;
+    this.calledByUserName = aCalledByUserName;
   }
 
   public uuid() {
@@ -271,7 +276,8 @@ export class DynamoDBLockManager {
       const dbg = Debug('callRefresher');
       if (!this.myActiveLocks.has(aLockKey)) {
         this.killLockHeartbeat(aLockKey);
-        return Promise.reject('This active lock has been released, so kill its interval timer');
+        dbg('This active lock has been released, so kill its interval timer');
+        return Promise.resolve(null);
       } else {
         dbg('calling refreshLock("%s")...', aLockKey);
         return this.refreshLock(aLockKey)
@@ -422,8 +428,8 @@ export class DynamoDBLockManager {
           this.myLockUUID,
           aNewVersionNum,
           this.lockSecsToLive,
-          this.hostName,
-          this.userName,
+          this.calledByHostName,
+          this.calledByUserName,
           nowDate,
           newTtl,
         );
@@ -446,7 +452,6 @@ export class DynamoDBLockManager {
         },
         ExpressionAttributeValues: {
           ':blockingLockExpired': blockingLockExpired,
-          // ':createdAt': lockToUpdate.createdAt.toISOString(),
           ':createdAt': lockToUpdate.createdAt ? lockToUpdate.createdAt.toISOString() : null,
           ':createdByHost': lockToUpdate.createdByHost,
           ':createdByUser': lockToUpdate.createdByUser,
